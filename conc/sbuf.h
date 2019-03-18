@@ -1,3 +1,6 @@
+#ifndef _SBUF_H
+#define _SBUF_H
+
 typedef struct{
     int *buf;   /* buffer array */
     int n;      /* maximun number of slots */
@@ -6,4 +9,5 @@ typedef struct{
     sem_t mutex;/* protects accesses to buf */
     sem_t slots;/* counts available slots */
     sem_t items;/* counts available items */
-}
+}sbuf_t;
+#endif 
