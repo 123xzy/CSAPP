@@ -10,4 +10,5 @@ typedef struct{
     sem_t slots;/* counts available slots */
     sem_t items;/* counts available items */
 }sbuf_t;
+
 #endif 
