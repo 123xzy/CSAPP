@@ -1,5 +1,8 @@
 /*
- * proxy.c
+ * proxy_1.c
+ *
+ * author:xzy
+ * data:2019.3.23
  */
 #include <stdio.h>
 #include "csapp.h"
@@ -11,12 +14,10 @@
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 
-void read_requesthdrs(rio_t *rp);
-void clienterror(int fd, char *cause, char *errnum, 
-		 char *shortmsg, char *longmsg);
 int conn_server(char *url,char *hostname,char *query_path,int *port);
 int parse_url(char *url, char *hostname,char *query_path,int *port);
 void doit(int connfd);
+void built_http_header(char *pre_http_header,char *hostname,char *path,int port,rio_t *client_rio);
 
 int main(int argc, char **argv) 
 {
@@ -54,70 +55,74 @@ int main(int argc, char **argv)
  */
 void doit(int connfd)
 {
-	
+
+	// store the info of request
+	char method[MAXLINE],url[MAXLINE],version[MAXLINE];
+
+	// parse the url and store info here
+	char hostname[MAXLINE],path[MAXLINE];
+	int port;
+
+	// rebuilt the http header 
+	char realserver_http_header[MAXLINE];
+	int real_serverfd;
+	rio_t server_rio;
+
+	rio_t proxy_rio;
+
+	Rio_readinitb(&rio,connfd);
+
+	// read the request info from client(Browser)
+	Rio_readlineb(&rio,buf,MAXLINE);
+	sscanf(buf,"%s %s %s",method,url,version);
+
+	// proxy only support GET
+	if(strcasecmp(method,"GET")){
+		printf("Proxy only support 'GET'\n");
+	}
+
+	parse_url(url,hostname,path,&port);
+
+	// rebulit the header which will send to the real server
+	built_http_header(realserver_http_header,hostname,path,port,&rio);
+
+	// connect to the end server
+	real_serverfd = conn_server(hostname,port,realserver_http_header);
+	if(real_serverfd < 0){
+		printf("connected to real server failed\n");
+		return;
+	}
+
+	Rio_readinitb(&server_rio,real_serverfd);
+	// write the http header to real server
+	Rio_writen(real_serverfd,realserver_http_header,strlen(realserver_http_header));
+
+	// receive message from real server and send to the client 
+	size_t n;
+	while((n = Rio_readlineb(&server_rio,buf,MAXLINE)) != 0){
+		printf("proxy received %d bytes\n",n);
+		Rio_writen(connfd,buf,n);
+	}
+	Close(real_serverfd);
+
 }
-
-
-
-/*
- * read_requesthdrs - read HTTP request headers
- */
-/* $begin read_requesthdrs */
-void read_requesthdrs(rio_t *rp) 
-{
-    char buf[MAXLINE];
-
-    Rio_readlineb(rp, buf, MAXLINE);
-    printf("%s", buf);
-    while(strcmp(buf, "\r\n")) {          //line:netp:readhdrs:checkterm
-	Rio_readlineb(rp, buf, MAXLINE);
-	printf("%s", buf);
-    }
-    return;
-}
-/* $end read_requesthdrs */
-
-
-
-
 
 /* 
  * fill the info of hostname,query_path,post about the specified url
  */
 int parse_uri(char *url,char *hostname,char *query_path,int *post)
 {
-	
+		
 }
-
 
 /*
- * clienterror - returns an error message to the client
+ * rebuilt the http header 
+ * change the hostname,path and port
  */
-/* $begin clienterror */
-void clienterror(int fd, char *cause, char *errnum, 
-		 char *shortmsg, char *longmsg) 
+void built_http_header(char *pre_http_header,char *hostname,char *path,int port,rio_t *client_rio)
 {
-    char buf[MAXLINE], body[MAXBUF];
 
-    /* Build the HTTP response body */
-    sprintf(body, "<html><title>Tiny Error</title>");
-    sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
-    sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
-    sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
-    sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
-
-    /* Print the HTTP response */
-    sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
-    Rio_writen(fd, buf, strlen(buf));
-    sprintf(buf, "Content-type: text/html\r\n");
-    Rio_writen(fd, buf, strlen(buf));
-    sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
-    Rio_writen(fd, buf, strlen(buf));
-    Rio_writen(fd, body, strlen(body));
 }
-/* $end clienterror */
-
-
 
 /* 
  * connect to server,if failed return nagative num
