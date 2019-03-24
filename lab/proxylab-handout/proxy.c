@@ -18,7 +18,6 @@ static const char *connection = "Connection:close\r\nProxy-Connection:close\r\n"
 int conn_server(char *hostname,int *port,char *query_path);
 int parse_url(char *url, char *hostname,char *query_path,int *port);
 void doit(int connfd);
-//void built_http_header(char *pre_http_header,char *hostname,char *path,int port,rio_t *client_rio);
 
 int main(int argc, char **argv) 
 {
@@ -63,7 +62,7 @@ void doit(int connfd)
 
 	// parse the url and store info here
 	char hostname[MAXLINE],path[MAXLINE];
-	int port = 0;
+	int port;
 
 	// rebuilt the http header 
 	char realserver_http_header[MAXLINE];
@@ -76,7 +75,7 @@ void doit(int connfd)
 
 	// read the request info from client(Browser)
 	Rio_readlineb(&proxy_rio,buf,MAXLINE);
-	sscanf(buf,"%s %s %s",method,url,version);
+	sscanf(buf,"%s%s%s",method,url,version);
 
 	// for test
 	printf("%s %s %s\n",method,url,version);
@@ -93,7 +92,7 @@ void doit(int connfd)
 	//built_http_header(realserver_http_header,hostname,path,port,&proxy_rio);
 
 	// connect to the end server
-	real_serverfd = conn_server(hostname,&port,realserver_http_header);
+	real_serverfd = conn_server(hostname,&port,path);
 	if(real_serverfd < 0){
 		printf("connected to real server failed\n");
 		return;
@@ -119,48 +118,36 @@ int parse_url(char *url,char *hostname,char *query_path,int *port)
 {
 	char *ptr_1;
 
+	// default port
+	*port = 8080;
+
 	// skip "http://" & "https://"
-	*ptr_1 = strstr(url,"//"); 	
+	ptr_1 = strstr(url,"//"); 	
 	ptr_1 += 2;
 
 	char *ptr_2 = strstr(ptr_1,":");
 
 	if(ptr_2 != NULL){ // such as "www.xzy.com:8080/index.html"
-		*ptr_2 = "\0";
+		*ptr_2 = '\0';
 		sscanf(ptr_1,"%s",hostname);
 		sscanf(ptr_2 + 1,"%d %s",port,query_path);
 	}else{ // such as "www.xzy.com/index.html
 		ptr_2 = strstr(ptr_1,"/");
 		if(ptr_2 != NULL) 
 		{
-			*ptr_2 = "\0";
+			ptr_2[0] = '\0';
 			sscanf(ptr_1,"%s",hostname);
-			*ptr_2 = "/";
+			*ptr_2 = '/';
 			sscanf(ptr_2,"%s",query_path);
 		}else
 			sscanf(ptr_1,"%s",hostname);
 	}
 
 	// for test
-	printf("%s %s %s %d\n",url,hostname,query_path,port);
-
+	printf("%s %s %s %d\n",url,hostname,query_path,*port);
+	
 	return;	
 }
-
-
-/*
- * rebuilt the http header 
- * change keys of Host,User-agent,Conneection,Proxy-Connection
- *
-void built_http_header(char *pre_http_header,char *hostname,char *path,int port,rio_t *client_rio)
-{
-	char buf[MAXLINE];
-
-	while(Rio_readlineb(&client_rio,buf,MAXLINE) > 0){
-
-}
- *
- */
 
 
 /* 
@@ -172,14 +159,19 @@ int conn_server(char *hostname,int *port,char *query_path)
 	int clientfd;
 	char buf[MAXLINE];
 	rio_t rio;
+	char port_str[MAXLINE];
+	sprintf(port_str,"%d",*port);
 
-	clientfd = Open_clientfd(hostname,port);	//built the connection to real server
+	printf("connecting to %s:%d\n",hostname,*port);
+	clientfd = Open_clientfd(hostname,port_str);	//built the connection to real server
 	Rio_readinitb(&rio,clientfd);
 
 	/* connection failed */
 	if(clientfd < 0){
 		printf("connection failed\n");
 		return clientfd;
+	}else{
+		printf("connection succ\n");
 	}
 
 	/* write request to server */
@@ -189,5 +181,6 @@ int conn_server(char *hostname,int *port,char *query_path)
 	Rio_writen(clientfd,buf,strlen(buf));
 	Rio_writen(clientfd,user_agent_hdr,strlen(user_agent_hdr));
 	Rio_writen(clientfd,connection,strlen(connection));
+	Rio_writen(clientfd,"\r\n",strlen("\r\n"));
 	return clientfd;
 }
