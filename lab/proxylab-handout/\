@@ -30,8 +30,6 @@ int conn_server(char *hostname,int *port,char *query_path);
 int parse_url(char *url, char *hostname,char *query_path,int *port);
 void *thread(void *vargp);
 
-static sem_t mutex;
-
 typedef struct cache_block{
 	char cache_obj[MAX_OBJECT_SIZE];
 	char url[MAXLINE];
@@ -61,7 +59,7 @@ Cache *cache_create(void);
 Cache_block *cache_read(Cache *cache,char *url);
 void cache_LRU(Cache *cache,Cache_block *block);
 void cache_write(Cache *cache,char *url,char *buf);
-Cache_block *block_init();
+void block_init(Cache_block *block);
 
 Cache *cache;
 
@@ -170,7 +168,7 @@ void *thread(void *vargp)
 			// receive message from real server and send to the client 
 			size_t n;
 			while((n = Rio_readlineb(&server_rio,buf,MAXLINE)) != 0){
-				//printf("proxy received %d bytes\n",(int)n);
+				//for bug:printf("proxy received %d bytes\n",(int)n);
 				Rio_writen(connfd,buf,n);
 				strcat(cache_buf,buf);		
 			}
@@ -277,7 +275,7 @@ Cache *cache_create()
 	if((cache = Malloc(sizeof(Cache))) == NULL)
 		return NULL;
 
-	*(cache->head) = *(cache->tail) = NULL;
+	cache->head = cache->tail = NULL;
 	cache->len = 0;
 
 	return cache;
@@ -329,18 +327,19 @@ void cache_write(Cache *cache,char *url,char *buf)
 {
 	Cache_block *block;
 
-	block = block_init();
+	block_init(block);
 
-	P(&mutex);
-
+	P(&block->w_cnt_mutex);
 	/* no block in cache */
-	if(cache->head == NULL)
+	if(cache->head->next == NULL)
 	{
+		
+		block->prev = block->next = NULL;
 		cache->head = cache->tail = block;
-		cache->len++;	
-	
-		strcpy(block->url,url);
-		strcpy(block->cache_obj,buf);
+		cache->len++;
+
+		sscanf(url,"%s",block->url); /*	copy url to cache block */
+		sscanf(buf,"%s",block->cache_obj); /* copy main boby to cache block */
 	}	
 	else{
 
@@ -365,29 +364,19 @@ void cache_write(Cache *cache,char *url,char *buf)
 			cache->len++;
 		}		
 	}
-	V(&mutex);
+	V(&block->w_cnt_mutex);
 }
 
-Cache_block *block_init()
+void block_init(Cache_block *block)
 {
-	Cache_block *block;
-	
-	if((block = (Cache_block*)Malloc(sizeof(Cache_block)) == NULL))
-	{
-		printf("malloc failed");
-		return NULL;
-	}
+	block = Malloc(sizeof(Cache_block));
 
 	//strcp(block->cache_obj,NULL);
 	//strcp(block->url,NULL);
 
-	//Sem_init(&block->r_cnt_mutex,0,0);
-	Sem_init(&mutex,0,1);
+	Sem_init(&block->r_cnt_mutex,0,0);
+	Sem_init(&block->w_cnt_mutex,0,1);
 
 	block->reader_cnt = 0;
 	block->writer_cnt = 0;
-	block->prev = NULL;
-	block->next = NULL;
-
-	return block;
 }
