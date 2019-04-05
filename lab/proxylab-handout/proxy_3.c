@@ -8,11 +8,8 @@
 #include <stdio.h>
 #include "csapp.h"
 #include "sbuf.h"
+#include "cache.h"
 
-/* Recommended max cache and object sizes */
-#define MAX_CACHE_SIZE 1049000
-#define MAX_OBJECT_SIZE 102400
-#define MAX_BLOCK_SIZE 10
 
 /* max thread sizes */
 #define NTHREADS 4
@@ -30,38 +27,11 @@ int conn_server(char *hostname,int *port,char *query_path);
 int parse_url(char *url, char *hostname,char *query_path,int *port);
 void *thread(void *vargp);
 
-static sem_t mutex;
-
-typedef struct cache_block{
-	char cache_obj[MAX_OBJECT_SIZE];
-	char url[MAXLINE];
-	
-	int reader_cnt;	/* cnt of readers */
-	sem_t r_cnt_mutex;	/* mutex of reader_cnt */
-
-	int writer_cnt; /* cnt of writers */
-	sem_t w_cnt_mutex;	/* mutex of writer_cnt */
-	
-	struct cache_block *prev;
-	struct cache_block *next;
-
-}Cache_block;
-
-typedef struct cache{
-
-	Cache_block *head;
-	Cache_block *tail;
-
-	unsigned long len;
-
-}Cache;
-
-/* cache function */
-Cache *cache_create(void);
-Cache_block *cache_read(Cache *cache,char *url);
-void cache_LRU(Cache *cache,Cache_block *block);
-void cache_write(Cache *cache,char *url,char *buf);
-Cache_block *block_init();
+/* Intern function */
+void free_block(Cache_block *block);
+Cache_block *create_block(char *url,char *obj);
+void list_insert_head(Cache *cache,Cache_block *block);
+void list_remove(Cache *cache,Cache_block *block);
 
 Cache *cache;
 
@@ -84,7 +54,7 @@ int main(int argc, char **argv)
     listenfd = Open_listenfd(argv[1]);
     sbuf_init(&sbuf,SBUFSIZE);
 
-    cache = cache_create();
+    cache = cache_init(MAX_BLOCK_SIZE); 	/* initialize the cache with size */
 
     for(i = 0;i < NTHREADS;i++)
    	Pthread_create(&tid,NULL,thread,NULL);
@@ -146,11 +116,15 @@ void *thread(void *vargp)
 
 		Cache_block *block;
 
-		if((block = cache_read(cache,url)) != NULL){
-			strcmp(buf,block->cache_obj);
-			printf("info from cache\n");
-			Rio_writen(connfd,buf,strlen(buf));
-		}else{
+		//if((block = cache_find(cache,url)) != NULL){
+			/* exist in cache and refresh*/
+		//	cache_hits_refresh(cache,block);
+
+		//	strcpy(buf,block->cache_obj);
+		//	printf("info from cache\n");
+			/* return to client */
+		//	Rio_writen(connfd,buf,strlen(buf));
+		//}else{
 
 			parse_url(url,hostname,path,&port);
 	
@@ -172,17 +146,18 @@ void *thread(void *vargp)
 			while((n = Rio_readlineb(&server_rio,buf,MAXLINE)) != 0){
 				//printf("proxy received %d bytes\n",(int)n);
 				Rio_writen(connfd,buf,n);
-				strcat(cache_buf,buf);		
+				if((strlen(cache_buf)+n) <= MAX_OBJECT_SIZE)
+					strcat(cache_buf,buf);	
+				//printf("%d %d\n",strlen(cache_buf),real_serverfd);	
 			}
 
 			/* store it */
 			if(strlen(cache_buf) < MAX_OBJECT_SIZE){
+				printf("cache %d from %s\n",strlen(cache_buf),url);
 				cache_write(cache,url,cache_buf);
-			}else{
-				Free(cache_buf);
 			}
 
-		}
+		//}
 	
 		Close(real_serverfd);
 		Close(connfd);
@@ -193,8 +168,12 @@ void *thread(void *vargp)
 /* 
  * fill the info of hostname,query_path,post about the specified url
  */
-int parse_url(char *url,char *hostname,char *query_path,int *port)
+int parse_url(char *n_url,char *hostname,char *query_path,int *port)
 {
+
+	char *url;
+	strcpy(url,n_url);
+
 	char *ptr_1;
 
 	// default port
@@ -223,8 +202,7 @@ int parse_url(char *url,char *hostname,char *query_path,int *port)
 	}
 
 	// for test
-	printf("%s %s %s %d\n",url,hostname,query_path,*port);
-	
+	//printf("%s %s %s %d\n",url,hostname,query_path,*port);
 	return;	
 }
 
@@ -241,7 +219,7 @@ int conn_server(char *hostname,int *port,char *query_path)
 	char port_str[MAXLINE];
 	sprintf(port_str,"%d",*port);
 
-	printf("connecting to %s:%d\n",hostname,*port);
+	//printf("connecting to %s:%d\n",hostname,*port);
 	clientfd = Open_clientfd(hostname,port_str);	//built the connection to real server
 	Rio_readinitb(&rio,clientfd);
 
@@ -249,8 +227,6 @@ int conn_server(char *hostname,int *port,char *query_path)
 	if(clientfd < 0){
 		printf("connection failed\n");
 		return clientfd;
-	}else{
-		printf("connection succ\n");
 	}
 
 	/* write request to server */
@@ -263,131 +239,4 @@ int conn_server(char *hostname,int *port,char *query_path)
 	Rio_writen(clientfd,"\r\n",strlen("\r\n"));
 
 	return clientfd;
-}
-
-
-/************************
- * Cache function 
- * **********************/
-
-Cache *cache_create()
-{
-	Cache *cache;
-
-	if((cache = Malloc(sizeof(Cache))) == NULL)
-		return NULL;
-
-	*(cache->head) = *(cache->tail) = NULL;
-	cache->len = 0;
-
-	return cache;
-}
-
-/* 
- * find url in cache
- * if not,return null
- */
-Cache_block *cache_read(Cache *cache,char *url)
-{
-	Cache_block *block;
-
-	block = cache->head;
-
-	while(block != NULL)
-	{
-		if(strcasecmp(block->url,url))
-		{
-			cache_LRU(cache,block);
-			return block;
-		}
-		else
-			block = block->next;
-	}
-
-	return NULL;
-}
-
-/*
- * rebulit the list
- */
-void cache_LRU(Cache *cache,Cache_block *block)
-{
-	/* link the block to the tail of list */
-	block->prev->next = block->next;
-	block->next->prev = block->prev;
-	block->prev = cache->tail;
-	cache->tail->next = block;
-	block->next = NULL;
-	cache->tail = block;
-}
-
-
-/* 
- * write new url into cache 
- */
-void cache_write(Cache *cache,char *url,char *buf)
-{
-	Cache_block *block;
-
-	block = block_init();
-
-	P(&mutex);
-
-	/* no block in cache */
-	if(cache->head == NULL)
-	{
-		cache->head = cache->tail = block;
-		cache->len++;	
-	
-		strcpy(block->url,url);
-		strcpy(block->cache_obj,buf);
-	}	
-	else{
-
-		sscanf(url,"%s",block->url); /*	copy url to cache block */
-		sscanf(buf,"%s",block->cache_obj); /* copy main boby to cache block */
-		
-		if(cache->len == MAX_BLOCK_SIZE)	/* too much blocks */
-		{
-			cache->head = cache->head->next;	
-			Free(cache->head->prev);
-			cache->head->prev = NULL;
-
-			block->prev = cache->tail;
-			cache->tail->next = block;
-			block->next = NULL;
-			cache->tail = block;
-		}else{			
-			block->prev = cache->tail;
-			cache->tail->next = block;
-			block->next = NULL;
-			cache->tail = block;
-			cache->len++;
-		}		
-	}
-	V(&mutex);
-}
-
-Cache_block *block_init()
-{
-	Cache_block *block;
-	
-	if((block = (Cache_block*)Malloc(sizeof(Cache_block)) == NULL))
-	{
-		printf("malloc failed");
-		return NULL;
-	}
-
-	//strcp(block->cache_obj,NULL);
-	//strcp(block->url,NULL);
-
-	//Sem_init(&block->r_cnt_mutex,0,0);
-	Sem_init(&mutex,0,1);
-
-	block->reader_cnt = 0;
-	block->writer_cnt = 0;
-	block->prev = NULL;
-	block->next = NULL;
-
-	return block;
 }
