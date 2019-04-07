@@ -12,7 +12,7 @@
 
 
 /* max thread sizes */
-#define NTHREADS 4
+#define NTHREADS 10
 
 /* max buffer size */
 #define SBUFSIZE 16
@@ -24,14 +24,8 @@ static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64;
 static const char *connection = "Connection:close\r\nProxy-Connection:close\r\n";
 
 int conn_server(char *hostname,int *port,char *query_path);
-int parse_url(char *url, char *hostname,char *query_path,int *port);
+int parse_url(const char *url, char *hostname,char *query_path,int *port);
 void *thread(void *vargp);
-
-/* Intern function */
-void free_block(Cache_block *block);
-Cache_block *create_block(char *url,char *obj);
-void list_insert_head(Cache *cache,Cache_block *block);
-void list_remove(Cache *cache,Cache_block *block);
 
 Cache *cache;
 
@@ -58,7 +52,7 @@ int main(int argc, char **argv)
 
     for(i = 0;i < NTHREADS;i++)
    	Pthread_create(&tid,NULL,thread,NULL);
- 	
+	
     while (1) {
 	clientlen = sizeof(clientaddr);
 
@@ -116,20 +110,21 @@ void *thread(void *vargp)
 
 		Cache_block *block;
 
-		//if((block = cache_find(cache,url)) != NULL){
-			/* exist in cache and refresh*/
-		//	cache_hits_refresh(cache,block);
+		if((block = cache_find(cache,url)) != NULL){
+			printf("hits the cache:%s\n",url);
 
-		//	strcpy(buf,block->cache_obj);
-		//	printf("info from cache\n");
+			/* exist in cache and refresh*/
+			cache_hits_refresh(cache,block);
+			cache_test(cache);
+			buf[0] = '\0';
+			strcat(buf,block->cache_obj);
+			//printf("%s\n",block->cache_obj);
+			//printf("%s\n",buf);
 			/* return to client */
-		//	Rio_writen(connfd,buf,strlen(buf));
-		//}else{
+			Rio_writen(connfd,buf,strlen(buf));
+		}else{
 
 			parse_url(url,hostname,path,&port);
-	
-			// rebulit the header which will send to the real server
-			//built_http_header(realserver_http_header,hostname,path,port,&proxy_rio);
 
 			// connect to the end server
 			real_serverfd = conn_server(hostname,&port,path);
@@ -143,24 +138,32 @@ void *thread(void *vargp)
 
 			// receive message from real server and send to the client 
 			size_t n;
+			int  overflow_flag = 0;
+
 			while((n = Rio_readlineb(&server_rio,buf,MAXLINE)) != 0){
 				//printf("proxy received %d bytes\n",(int)n);
 				Rio_writen(connfd,buf,n);
-				if((strlen(cache_buf)+n) <= MAX_OBJECT_SIZE)
+				if((strlen(cache_buf)+n) <= MAX_OBJECT_SIZE && !overflow_flag)
 					strcat(cache_buf,buf);	
-				//printf("%d %d\n",strlen(cache_buf),real_serverfd);	
+				else 
+					overflow_flag = 1;
+					//printf("%d %d\n",strlen(cache_buf),real_serverfd);	
+				
 			}
 
 			/* store it */
 			if(strlen(cache_buf) < MAX_OBJECT_SIZE){
-				printf("cache %d from %s\n",strlen(cache_buf),url);
 				cache_write(cache,url,cache_buf);
+				//printf("%s",cache_buf);
+				printf("cache %ld bytes of %s(cache space %d/%d)\n",strlen(cache_buf),url,cache->block_size,MAX_BLOCK_SIZE);
 			}
 
-		//}
+			Close(real_serverfd);
+
+		}
 	
-		Close(real_serverfd);
 		Close(connfd);
+
 	}
 }
 
@@ -168,11 +171,12 @@ void *thread(void *vargp)
 /* 
  * fill the info of hostname,query_path,post about the specified url
  */
-int parse_url(char *n_url,char *hostname,char *query_path,int *port)
+int parse_url(const char *url,char *hostname,char *query_path,int *port)
 {
 
-	char *url;
-	strcpy(url,n_url);
+	char temp_url[MAXLINE];
+	temp_url[0] = '\0';
+	strcat(temp_url,url);
 
 	char *ptr_1;
 
@@ -180,7 +184,7 @@ int parse_url(char *n_url,char *hostname,char *query_path,int *port)
 	*port = 8080;
 
 	// skip "http://" & "https://"
-	ptr_1 = strstr(url,"//"); 	
+	ptr_1 = strstr(temp_url,"//"); 	
 	ptr_1 += 2;
 
 	char *ptr_2 = strstr(ptr_1,":");

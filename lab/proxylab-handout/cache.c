@@ -6,7 +6,6 @@
 
 Cache *cache_init(int capaticity)
 {
-	int i;
 	Cache *cache;
 
 	if((cache = Malloc(sizeof(Cache))) == NULL)
@@ -31,29 +30,40 @@ Cache_block *cache_find(Cache *cache,char *url)
 {
 	Cache_block *block;
 
+	P(&(cache->mutex));
 	block = cache->head;
+	V(&(cache->mutex));
 
 	while(block != NULL)
 	{
-		P(&block->r_cnt_mutex);
-		block->reader_cnt++;
-		if(block->reader_cnt == 1) 	/* first in */
-			P(&block->w_cnt_mutex);
-		V(&block->r_cnt_mutex);
 
-		if(strcmp(url,block->url))
-			break;
 
-		P(&block->r_cnt_mutex);
-		block->reader_cnt--;
-		if(block->reader_cnt == 0)	/* last out */
-			V(&block->w_cnt_mutex);
-		V(&(block->r_cnt_mutex));
+		P(&(cache->mutex));
+		//P(&(block->r_cnt_mutex));
+		//block->reader_cnt++;
 
+		//V(&(block->r_cnt_mutex));
+
+		if(!strcmp(url,block->url))
+		{
+			V(&(cache->mutex));
+
+	//if(block != NULL)
+	//	printf("%s",block->cache_obj);
+			return block;
+		}
+
+		//P(&(block->r_cnt_mutex));
+		//block->reader_cnt--;
+		//if(block->reader_cnt == 0)	/* last out */
+		//	V(&block->w_cnt_mutex);
+		//V(&(block->r_cnt_mutex));
 
 		block = block->next;
 		
+		V(&(cache->mutex));
 	}
+	
 
 	return block;
 }
@@ -65,16 +75,17 @@ void cache_write(Cache *cache,char *url,char *buf)
 {
 	Cache_block *block;
 	block = create_block(url,buf);
-
+	
 	/* reach max capaticity and remove the tail of cache */
 	P(&(cache->mutex));
 	if(cache->block_size == MAX_BLOCK_SIZE)
 	{
-		list_remove(cache,cache->tail);
-		Free(cache->tail);
-	}
-	V(&(cache->mutex));
 
+		V(&(cache->mutex));
+		list_remove(cache,cache->tail);
+		//Free(cache->tail);
+	}else
+		V(&(cache->mutex));
 	list_insert_head(cache,block);
 }
 
@@ -87,13 +98,17 @@ void cache_hits_refresh(Cache *cache,Cache_block *block)
 }
 
 
-/* notice:memory of block not free here */
+/* notice:
+ * memory of block not free here except
+ * when remove the tail of cache
+ * */
 void list_remove(Cache *cache,Cache_block *block)
 {
 
+
 	if(cache->block_size == 0)
 		return;
-
+	
 	/* block is head */
 	if(cache->head == block){
 		P(&(cache->mutex));
@@ -102,10 +117,12 @@ void list_remove(Cache *cache,Cache_block *block)
 		V(&(cache->mutex));
 	}
 	/* block is tail */
-	else if(block = cache->tail){
+	else if(block == cache->tail){
 		P(&(cache->mutex));
+		//printf("remove the tail\n");
 		cache->tail = block->prev;
 		cache->tail->next = NULL;
+		//Free(block);
 		V(&(cache->mutex));
 	}
 	else {
@@ -118,6 +135,7 @@ void list_remove(Cache *cache,Cache_block *block)
 	P(&(cache->mutex));
 	cache->block_size--;
 	V(&(cache->mutex));
+
 }
 
 void list_insert_head(Cache *cache,Cache_block *block)
@@ -127,11 +145,11 @@ void list_insert_head(Cache *cache,Cache_block *block)
 		list_remove(cache,cache->tail);
 	}	
 
-	
 	/* empty cache*/
 	if(cache->head == NULL && cache->tail == NULL){
 		P(&(cache->mutex));
 		cache->head = cache->tail = block;
+		cache->block_size++;
 		V(&(cache->mutex));
 	}
 	else{
@@ -140,9 +158,9 @@ void list_insert_head(Cache *cache,Cache_block *block)
 		block->prev = NULL;
 		cache->head->prev = block;
 		cache->head = block;
+		cache->block_size++;
 		V(&(cache->mutex));
 	}
-
 }
 
 Cache_block *create_block(char *url,char *obj)
@@ -170,4 +188,19 @@ void free_block(Cache_block *block)
 		return;
 	}
 	Free(block);
-}	
+}
+
+void cache_test(Cache *cache)
+{
+	Cache_block *block;
+
+	block = cache->head;
+
+	while(block != NULL){
+		printf("%s %ld\n",block->url,strlen(block->cache_obj));
+		block = block->next;
+	}
+
+	return;
+
+}
