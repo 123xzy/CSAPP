@@ -226,7 +226,8 @@ void Close(int fd)
     int rc;
 
     if ((rc = close(fd)) < 0)
-* {% post_link CSAPP-第十章 %}：未整理	unix_error("Close error");
+	unix_error("Close error");
+    return;
 }
 
 int Select(int  n, fd_set *readfds, fd_set *writefds,
