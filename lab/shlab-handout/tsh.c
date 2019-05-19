@@ -2,6 +2,7 @@
  * tsh - A tiny shell program with job control
  * 
  * <Put your name and login ID here>
+ *
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,7 +166,36 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
-    return;
+	char buf[MAXLINE];	/* holds modified command line */
+	char *argv[MAXARGS];	/* argument list execve */
+	int bg;			/* should the job run in bg or fg */
+	pid_t pid;		/* process id */
+
+	strcpy(buf,cmdline);	
+	bg = parseline(buf,argv);
+
+	if(argv[0] == NULL)
+		return;		/* ignore empty lines */
+
+	if(!builtin_cmd(argv)){
+		if((pid = fork()) == 0){	/* child runs user jobs */
+			if(execve(argv[0],argv,environ) < 0){
+				printf("%s:Command not found.\n",argv[0]);
+				exit(0);
+			}
+		}
+
+		/* Parent wait for foreground job to terminate */
+		if(!bg){
+			int status;
+			if(waitpid(pid,&status,0) < 0)
+				unix_error("waitfg:waitpid error");
+		}
+		else
+			printf("%d %s",pid,cmdline);
+	}
+
+	return;
 }
 
 /* 
@@ -231,7 +261,18 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv) 
 {
-    return 0;     /* not a builtin command */
+
+	if(!strcmp(argv[0],"quit"))	/* quit command */
+		exit(0);
+	if(!strcmp(argv[0],"bg") || !strcmp(argv[0],"fg")){	/* fg and bg commands */
+		do_bgfg(argv);
+		return 1;
+	}
+	if(!strcmp(argv[0],"jobs")){
+		listjobs(jobs);
+		return 1;
+	}
+    	return 0;     /* not a builtin command */
 }
 
 /* 
