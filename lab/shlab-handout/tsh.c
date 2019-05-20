@@ -185,6 +185,12 @@ void eval(char *cmdline)
 			}
 		}
 
+		// add job to jobs list
+		if(bg)
+			addjob(jobs,pid,BG,cmdline);
+		else
+			addjob(jobs,pid,FG,cmdline);
+
 		/* Parent wait for foreground job to terminate */
 		if(!bg){
 			int status;
@@ -192,7 +198,7 @@ void eval(char *cmdline)
 				unix_error("waitfg:waitpid error");
 		}
 		else
-			printf("%d %s",pid,cmdline);
+			printf("[%d] (%d) %s",pid2jid(pid),pid,cmdline);
 	}
 
 	return;
@@ -280,7 +286,38 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-    return;
+	int jid,pid;
+	struct job_t *job;
+	char *id = argv[1];
+	if(id == NULL){
+		printf("%s command requires PID or %%jobid argument\n",argv[0]);
+		return;
+	}
+
+	if(id[0] == '%')
+		jid = atoi(id + 1);
+	else
+		pid = atoi(id);
+
+	if((job = getjobjid(jobs,jid)) == NULL){
+		printf("No such job\n");
+		return;
+	}
+
+	if(!strcmp(argv[0],"bg")){
+		job->state = BG;
+		kill(-(job->pid),SIGCONT);
+	}
+
+
+	if(!strcmp(argv[0],"fg")){
+		job->state = FG;
+		kill(-(job->pid),SIGCONT);
+		waitfg(job->pid);
+	}
+	
+	printf("[%d] (%d) %s\n",jid,job->pid,job->cmdline);
+    	return;
 }
 
 /* 
@@ -314,7 +351,20 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
-    return;
+
+//listjobs(jobs);
+	pid_t fg_pid = fgpid(jobs);
+	int jid = pid2jid(fg_pid);			
+	
+//printf("%d %d",fg_pid,jid);
+
+	if(fg_pid != 0){
+		printf("Job [%d] (%d) terminated by signal %d\n",jid,fg_pid,sig);
+		deletejob(jobs,fg_pid);
+		kill(-fg_pid,sig);
+	}
+
+     	return;
 }
 
 /*
@@ -324,7 +374,20 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
-    return;
+	 
+//listjobs(jobs);
+	pid_t fg_pid = fgpid(jobs);
+	int jid = pid2jid(fg_pid);			
+	
+//printf("%d %d",fg_pid,jid);
+
+	if(fg_pid != 0){
+		(*(getjobpid(jobs,fg_pid))).state = ST;
+		kill(-fg_pid,sig);
+		printf("Job [%d] (%d) stopped by signal %d\n",jid,fg_pid,sig);
+	}
+
+     	return;    
 }
 
 /*********************
