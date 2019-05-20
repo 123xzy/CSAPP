@@ -185,17 +185,16 @@ void eval(char *cmdline)
 			}
 		}
 
-		// add job to jobs list
+	// add job to jobs list
+	//if(strcmp(argv[0],"/bin/echo")){
 		if(bg)
 			addjob(jobs,pid,BG,cmdline);
 		else
 			addjob(jobs,pid,FG,cmdline);
-
+	//}
 		/* Parent wait for foreground job to terminate */
 		if(!bg){
-			int status;
-			if(waitpid(pid,&status,0) < 0)
-				unix_error("waitfg:waitpid error");
+			waitfg(pid);
 		}
 		else
 			printf("[%d] (%d) %s",pid2jid(pid),pid,cmdline);
@@ -298,7 +297,7 @@ void do_bgfg(char **argv)
 		jid = atoi(id + 1);
 	else
 		pid = atoi(id);
-
+	
 	if((job = getjobjid(jobs,jid)) == NULL){
 		printf("No such job\n");
 		return;
@@ -316,7 +315,7 @@ void do_bgfg(char **argv)
 		waitfg(job->pid);
 	}
 	
-	printf("[%d] (%d) %s\n",jid,job->pid,job->cmdline);
+	//printf("[%d] (%d) %s\n",jid,job->pid,job->cmdline);
     	return;
 }
 
@@ -325,7 +324,9 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
-    return;
+	while(pid == fgpid(jobs))
+		;
+    	return;
 }
 
 /*****************
@@ -341,7 +342,18 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
-    return;
+	int state;
+	pid_t ret_pid;//pid of child job which has returned
+
+	// wait for any child process to return
+	while((ret_pid = waitpid(-1,&state,WNOHANG | WUNTRACED)) > 0){
+		if(WIFSTOPPED(ret_pid))
+			sigtstp_handler(sig);
+		else
+			deletejob(jobs,ret_pid);
+	}
+
+    	return;
 }
 
 /* 
