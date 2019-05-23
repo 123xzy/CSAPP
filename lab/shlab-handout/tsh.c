@@ -171,6 +171,11 @@ void eval(char *cmdline)
 	int bg;			/* should the job run in bg or fg */
 	pid_t pid;		/* process id */
 
+	sigset_t mask;	
+	sigemptyset(&mask);
+	sigaddset(&mask,SIGCHLD);
+	sigprocmask(SIG_BLOCK,&mask,NULL);
+
 	strcpy(buf,cmdline);	
 	bg = parseline(buf,argv);
 
@@ -179,6 +184,7 @@ void eval(char *cmdline)
 
 	if(!builtin_cmd(argv)){
 		if((pid = fork()) == 0){	/* child runs user jobs */
+			sigprocmask(SIG_UNBLOCK,&mask,NULL);
 			if(execve(argv[0],argv,environ) < 0){
 				printf("%s:Command not found.\n",argv[0]);
 				exit(0);
@@ -192,6 +198,8 @@ void eval(char *cmdline)
 		else
 			addjob(jobs,pid,FG,cmdline);
 	//}
+		
+		sigprocmask(SIG_UNBLOCK,&mask,NULL);
 		/* Parent wait for foreground job to terminate */
 		if(!bg){
 			waitfg(pid);
@@ -285,26 +293,42 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-	int jid,pid;
+	int job_id = 0,pro_id = 0;
 	struct job_t *job;
+	int flag = 0;
 	char *id = argv[1];
 	if(id == NULL){
 		printf("%s command requires PID or %%jobid argument\n",argv[0]);
 		return;
 	}
 
-	if(id[0] == '%')
-		jid = atoi(id + 1);
-	else
-		pid = atoi(id);
-	
-	if((job = getjobjid(jobs,jid)) == NULL){
-		printf("No such job\n");
+	if(id[0] == '%'){
+		flag = 1;
+		job_id = atoi(id + 1);
+	}
+	else{
+		pro_id = atoi(id);
+		job_id = pid2jid(pro_id);
+	}
+
+	if(pro_id == 0 && job_id == 0){
+		printf("(%d): argument must be a PID or %%jobid\n",job_id);
+	printf("%d %d\n",pro_id,job_id);
+		return;
+	}
+
+
+	if(flag && (job = getjobjid(jobs,job_id)) == NULL){
+		printf("[%d]: No such job\n",job_id);
+		return;
+	}else if((job = getjobjid(jobs,job_id)) == NULL){
+		printf("(%d): No such process\n",pro_id);
 		return;
 	}
 
 	if(!strcmp(argv[0],"bg")){
 		job->state = BG;
+		printf("[%d] (%d) %s",job->jid,job->pid,job->cmdline);
 		kill(-(job->pid),SIGCONT);
 	}
 
@@ -349,9 +373,14 @@ void sigchld_handler(int sig)
 	while((ret_pid = waitpid(-1,&state,WNOHANG | WUNTRACED)) > 0){
 		if(WIFSTOPPED(ret_pid))
 			sigtstp_handler(sig);
+		else if(WIFSIGNALED(state))
+			sigtstp_handler(-ret_pid);
 		else
 			deletejob(jobs,ret_pid);
 	}
+
+	if(errno != ECHILD)
+		unix_error("error");
 
     	return;
 }
@@ -620,6 +649,3 @@ void sigquit_handler(int sig)
     printf("Terminating after receipt of SIGQUIT signal\n");
     exit(1);
 }
-
-
-
