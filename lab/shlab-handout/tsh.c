@@ -171,10 +171,11 @@ void eval(char *cmdline)
 	int bg;			/* should the job run in bg or fg */
 	pid_t pid;		/* process id */
 
-	sigset_t mask;	
+	sigset_t mask;
 	sigemptyset(&mask);
 	sigaddset(&mask,SIGCHLD);
-	sigprocmask(SIG_BLOCK,&mask,NULL);
+	sigaddset(&mask,SIGINT);
+	sigaddset(&mask,SIGTSTP);
 
 	strcpy(buf,cmdline);	
 	bg = parseline(buf,argv);
@@ -183,13 +184,20 @@ void eval(char *cmdline)
 		return;		/* ignore empty lines */
 
 	if(!builtin_cmd(argv)){
+		
+		sigprocmask(SIG_BLOCK,&mask,NULL);
+
 		if((pid = fork()) == 0){	/* child runs user jobs */
 			sigprocmask(SIG_UNBLOCK,&mask,NULL);
+			setpgid(0,0);/* set new process to new process group */
+
 			if(execve(argv[0],argv,environ) < 0){
 				printf("%s:Command not found.\n",argv[0]);
 				exit(0);
 			}
 		}
+
+//		sigprocmask(SIG_BLOCK,&mask_all,NULL);
 
 	// add job to jobs list
 	//if(strcmp(argv[0],"/bin/echo")){
@@ -199,11 +207,13 @@ void eval(char *cmdline)
 			addjob(jobs,pid,FG,cmdline);
 	//}
 		
+		
 		sigprocmask(SIG_UNBLOCK,&mask,NULL);
+		sigemptyset(&mask);
+
 		/* Parent wait for foreground job to terminate */
-		if(!bg){
+		if(!bg)
 			waitfg(pid);
-		}
 		else
 			printf("[%d] (%d) %s",pid2jid(pid),pid,cmdline);
 	}
@@ -349,7 +359,7 @@ void do_bgfg(char **argv)
 void waitfg(pid_t pid)
 {
 	while(pid == fgpid(jobs))
-		;
+		sleep(0);
     	return;
 }
 
@@ -366,21 +376,28 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
-	int state;
+	int state,chld_sig;
 	pid_t ret_pid;//pid of child job which has returned
 
 	// wait for any child process to return
 	while((ret_pid = waitpid(-1,&state,WNOHANG | WUNTRACED)) > 0){
-		if(WIFSTOPPED(ret_pid))
-			sigtstp_handler(sig);
-		else if(WIFSIGNALED(state))
-			sigtstp_handler(-ret_pid);
+		if(WIFSTOPPED(state))
+			sigtstp_handler(WSTOPSIG(state));
+
+		/* handle child process interrupt,like test16 */
+		else if(WIFSIGNALED(state)){
+			chld_sig = WTERMSIG(state);
+			if(chld_sig == SIGINT)
+				sigint_handler(chld_sig);
+		}
 		else
 			deletejob(jobs,ret_pid);
 	}
 
+	/*
 	if(errno != ECHILD)
 		unix_error("error");
+	*/
 
     	return;
 }
@@ -420,7 +437,7 @@ void sigtstp_handler(int sig)
 	pid_t fg_pid = fgpid(jobs);
 	int jid = pid2jid(fg_pid);			
 	
-//printf("%d %d",fg_pid,jid);
+//printf("%d %d\n",fg_pid,sig);
 
 	if(fg_pid != 0){
 		(*(getjobpid(jobs,fg_pid))).state = ST;
